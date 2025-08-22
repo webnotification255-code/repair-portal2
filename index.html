@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>ระบบแจ้งซ่อม</title>
+<style>
+  :root{--b:#0ea5e9;--bd:#e5e7eb;--txt:#111827;--mut:#6b7280}
+  *{box-sizing:border-box} body{font-family:system-ui,-apple-system,Segoe UI,Roboto,TH Sarabun New,Prompt,Arial,sans-serif;margin:0;background:#f8fafc;color:var(--txt)}
+  .wrap{max-width:880px;margin:0 auto;padding:20px}
+  h1{font-size:22px;margin:8px 0 16px}
+  .card{background:#fff;border:1px solid var(--bd);border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.04);padding:16px;margin:12px 0}
+  label{font-weight:600;display:block;margin-top:10px}
+  input,select,textarea{width:100%;padding:10px;border:1px solid #d1d5db;border-radius:10px;margin-top:6px;background:#fff}
+  textarea{resize:vertical}
+  .row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  button{padding:10px 16px;border:0;border-radius:10px;background:var(--b);color:#fff;font-weight:700;cursor:pointer}
+  button:disabled{opacity:.6;cursor:not-allowed}
+  .muted{color:var(--mut);font-size:12px}
+  .badge{padding:4px 8px;border-radius:999px;font-size:12px;display:inline-block;background:#f3f4f6}
+  .status-OPEN{background:#fef3c7}
+  .status-DONE{background:#dcfce7}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>ระบบแจ้งซ่อม</h1>
+
+  <div class="card">
+    <h2>เข้าสู่ระบบ</h2>
+    <div id="auth">
+      <div id="step-email">
+        <label>อีเมล</label>
+        <input id="email" type="email" placeholder="you@company.com"/>
+        <div class="muted">กรอกอีเมลเพื่อรับรหัส OTP</div>
+        <button id="btn-send">ส่งรหัส OTP</button>
+      </div>
+      <div id="step-otp" style="display:none">
+        <label>รหัส OTP</label>
+        <input id="otp" inputmode="numeric" maxlength="6" placeholder="6 หลัก"/>
+        <button id="btn-verify">ยืนยัน</button>
+        <div class="muted">ไม่ได้รับรหัส? ส่งใหม่จากขั้นตอนก่อนหน้า</div>
+      </div>
+      <div id="whoami" style="display:none" class="muted"></div>
+    </div>
+  </div>
+
+  <div class="card" id="form-card" style="display:none">
+    <h2>แจ้งซ่อม</h2>
+    <div class="row">
+      <div>
+        <label>ชื่อผู้ติดต่อ</label>
+        <input id="name" placeholder="ชื่อ-นามสกุล"/>
+      </div>
+      <div>
+        <label>เบอร์โทร</label>
+        <input id="phone" placeholder="0xx-xxx-xxxx"/>
+      </div>
+    </div>
+    <label>สถานที่/ห้อง</label>
+    <input id="location" placeholder="อาคาร/ห้อง/แผนก"/>
+    <label>หมวดปัญหา</label>
+    <select id="category">
+      <option value="">— เลือก —</option>
+      <option>ไฟฟ้า</option><option>ประปา</option><option>คอมพ์/เครือข่าย</option><option>ส่วนอื่นๆ</option>
+    </select>
+    <label>รายละเอียด</label>
+    <textarea id="detail" rows="4" placeholder="อธิบายปัญหา..."></textarea>
+    <label>ลิงก์รูป (Google Drive/อื่นๆ)</label>
+    <input id="photo_urls" placeholder="วางลิงก์ภาพ (ถ้ามี)"/>
+    <label>อีเมลช่าง (ถ้าเว้นว่างจะใช้ค่าเริ่มต้นระบบ)</label>
+    <input id="tech_email" type="email" placeholder="tech@company.com"/>
+    <div style="margin-top:12px">
+      <button id="btn-submit">ส่งแจ้งซ่อม</button>
+    </div>
+    <div id="msg"></div>
+  </div>
+
+  <div class="card" id="history-card" style="display:none">
+    <h2>ประวัติการแจ้งซ่อมของฉัน</h2>
+    <div id="history"></div>
+  </div>
+</div>
+
+<script>
+const GAS_URL = 'https://script.google.com/macros/s/AKfycbyZa5IC89gFEO1Xjf-WDqlbsuox8fACg7KDqqVtUN2sx-Np2mZ5WxToXi8i_AT7WeE/exec'; // ← ใส่ URL /exec ของ Apps Script
+
+const $ = s => document.querySelector(s);
+const emailEl = $('#email'), otpEl = $('#otp'), whoEl = $('#whoami');
+const formCard = $('#form-card'), histCard = $('#history-card'), msgEl = $('#msg');
+
+const state = {
+  email: localStorage.getItem('repair_email') || '',
+  session: localStorage.getItem('repair_session') || ''
+};
+
+function uiLoggedIn(){
+  $('#step-email').style.display='none';
+  $('#step-otp').style.display='none';
+  whoEl.textContent = `เข้าสู่ระบบแล้ว: ${state.email}`;
+  whoEl.style.display='block';
+  formCard.style.display='block';
+  histCard.style.display='block';
+  loadHistory();
+}
+
+async function post(action, payload){
+  const res = await fetch(GAS_URL, {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({action, ...payload})
+  });
+  return res.json();
+}
+
+async function sendOTP(){
+  const email = emailEl.value.trim();
+  if(!email){ alert('กรอกอีเมล'); return; }
+  const r = await post('request_otp', {email});
+  if(!r.ok){ alert(r.error||'ส่งรหัสไม่สำเร็จ'); return; }
+  sessionStorage.setItem('pending_email', email);
+  $('#step-email').style.display='none';
+  $('#step-otp').style.display='block';
+}
+
+async function verifyOTP(){
+  const email = sessionStorage.getItem('pending_email') || emailEl.value.trim();
+  const otp = otpEl.value.trim();
+  if(!email || !otp){ alert('กรอกข้อมูลให้ครบ'); return; }
+  const r = await post('verify_otp', {email, otp});
+  if(!r.ok){ alert(r.error||'OTP ไม่ถูกต้อง'); return; }
+  state.email = email;
+  state.session = r.session_token;
+  localStorage.setItem('repair_email', state.email);
+  localStorage.setItem('repair_session', state.session);
+  uiLoggedIn();
+}
+
+async function submitTicket(){
+  const payload = {
+    name: $('#name').value.trim(),
+    phone: $('#phone').value.trim(),
+    location: $('#location').value.trim(),
+    category: $('#category').value.trim(),
+    detail: $('#detail').value.trim(),
+    photo_urls: $('#photo_urls').value.trim(),
+    tech_email: $('#tech_email').value.trim()
+  };
+  $('#btn-submit').disabled = true;
+  msgEl.textContent = 'กำลังส่ง...';
+  const r = await post('create_ticket', {session_email: state.email, session_token: state.session, payload});
+  $('#btn-submit').disabled = false;
+  if(!r.ok){
+    msgEl.textContent = r.error || 'เกิดข้อผิดพลาด';
+  }else{
+    msgEl.textContent = `ส่งสำเร็จ (#${r.id}) — อีเมลแจ้งช่างถูกส่งแล้ว`;
+    ['location','category','detail','photo_urls'].forEach(id=>$('#'+id).value='');
+    loadHistory();
+  }
+}
+
+async function loadHistory(){
+  const r = await post('list_my_tickets', {session_email: state.email, session_token: state.session});
+  if(!r.ok){
+    $('#history').innerHTML = `<div class="muted">${r.error||'โหลดประวัติไม่สำเร็จ'}</div>`;
+    return;
+  }
+  if(!r.items.length){
+    $('#history').innerHTML = `<div class="muted">ยังไม่มีรายการ</div>`;
+    return;
+  }
+  $('#history').innerHTML = r.items.map(it=>`
+    <div class="card" style="margin:8px 0;">
+      <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;">
+        <div><b>#${it.id}</b> — ${it.category||'-'} @ ${it.location||'-'}</div>
+        <span class="badge status-${it.status||''}">${it.status||''}</span>
+      </div>
+      <div class="muted">${new Date(it.timestamp).toLocaleString()}</div>
+      <div style="margin-top:6px;white-space:pre-wrap">${(it.detail||'').replace(/</g,'&lt;')}</div>
+      ${it.photo_urls ? `<div class="muted">รูป: ${it.photo_urls}</div>`:''}
+    </div>
+  `).join('');
+}
+
+$('#btn-send').addEventListener('click', sendOTP);
+$('#btn-verify').addEventListener('click', verifyOTP);
+$('#btn-submit').addEventListener('click', submitTicket);
+
+if(state.email && state.session){
+  uiLoggedIn();
+} else if(state.email){ emailEl.value = state.email; }
+</script>
+</body>
+</html>
